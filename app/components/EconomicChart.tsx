@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useMemo } from 'react'; // Use useMemo for calculations
-import { ResponsiveLine } from "@nivo/line";
+import { ResponsiveLine, PointTooltipProps } from "@nivo/line"; // Import PointTooltipProps type
 
 // --- Types ---
 interface DataPoint {
@@ -13,7 +13,7 @@ interface DataPoint {
 interface NivoLineSeries {
     id: string;
     color: string;
-    data: { x: string; y: number }[];
+    data: { x: string; y: number | null }; // Allow null here temporarily before coalesce
 }
 
 interface EconomicChartProps {
@@ -51,11 +51,17 @@ function createSegments(dataArray: DataPoint[]): DataPoint[][] {
 
 const formatYAxis = (val: number | string): string => {
     const num = typeof val === "number" ? val : Number(val);
-    if (isNaN(num)) return '';
+    if (isNaN(num)) return ''; // Handle non-numeric cases gracefully
+    // Check if number is effectively zero before applying large number formatting
+    if (Math.abs(num) < 1e-9) return '0'; // Handle very small numbers as 0
     if (Math.abs(num) >= 1e6) {
         return (num / 1e6).toFixed(1).replace(/\.0$/, "") + "m";
     }
-    return num.toLocaleString(undefined, { maximumFractionDigits: 1 });
+    // Use toLocaleString for better formatting of smaller/decimal numbers
+    return num.toLocaleString(undefined, {
+        maximumFractionDigits: 2, // Adjust precision as needed
+        minimumFractionDigits: 0,
+     });
 };
 
 // --- Component ---
@@ -69,28 +75,27 @@ export default function EconomicChart({
     showPoints,
 }: EconomicChartProps) {
 
-    // Filter data based on dateRange prop *inside* the component
     const filteredData = useMemo(() => {
         const start = Math.max(0, dateRange[0]);
-        // Add 1 to end index because slice is exclusive at the end
         const end = Math.min(fullData.length, dateRange[1] + 1);
         if (start >= end && fullData.length > 0) {
-             // If range is invalid (e.g., start > end), return just the start point if possible
              return fullData.slice(start, start + 1);
         }
-        return fullData.slice(start, end);
+         // Ensure end index is at least start index
+         const validEnd = Math.max(start, end);
+        return fullData.slice(start, validEnd);
     }, [fullData, dateRange]);
 
-    // Calculate chart data, ticks, baseline based on filteredData
     const { finalChartData, tickValues, areaBaselineValue, hasEnoughPoints } = useMemo(() => {
-        const validFilteredData = filteredData ?? []; // Ensure it's an array
+        const validFilteredData = filteredData ?? [];
         const currentHasEnoughPoints = validFilteredData.filter(d => d.value !== null).length >= 2;
 
         const segments = createSegments(validFilteredData);
         const chartData: NivoLineSeries[] = segments.map((segment, idx) => ({
-            id: `${chartId}_${idx}`, // Ensure unique ID for Nivo
+            id: `${chartId}_${idx}`,
             color: color,
-            data: segment.map((d) => ({ x: d.date, y: d.value ?? 0 })),
+            // Ensure y is a number or null here for typing, coalesce later if needed
+            data: segment.map((d) => ({ x: d.date, y: d.value })),
         }));
 
         const interval = currentHasEnoughPoints ? Math.max(1, Math.ceil(validFilteredData.length / 12)) : 1;
@@ -108,8 +113,7 @@ export default function EconomicChart({
             .filter((v): v is number => v != null);
         if (values.length > 0) {
             const minValue = Math.min(...values);
-            baseline = minValue >= 0 ? 0 : minValue; // Baseline at 0 or actual min if negative values exist
-             // Respect manual yMin if set and valid
+            baseline = minValue >= 0 ? 0 : minValue;
              if (yMin !== 'auto' && !isNaN(Number(yMin))) {
                  baseline = Math.max(baseline, Number(yMin));
              }
@@ -123,10 +127,23 @@ export default function EconomicChart({
             areaBaselineValue: baseline,
             hasEnoughPoints: currentHasEnoughPoints
         };
-    }, [filteredData, chartId, color, yMin]); // Dependencies for recalculation
+    }, [filteredData, chartId, color, yMin]); // Ensure all dependencies are correct
 
     const computedYMin = useMemo(() => (yMin === 'auto' ? 'auto' : Number(yMin)), [yMin]);
     const computedYMax = useMemo(() => (yMax === 'auto' ? 'auto' : Number(yMax)), [yMax]);
+
+    // Type the tooltip point argument
+    const CustomTooltip = ({ point }: PointTooltipProps) => {
+        // Default to 0 if y is null/undefined before formatting
+        const yValue = point.data.y ?? 0;
+        return (
+            <div style={{ background: 'white', padding: '9px 12px', border: '1px solid #ccc', fontSize: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', borderRadius: '2px' }}>
+                <strong>Date:</strong> {point.data.xFormatted}<br />
+                {/* FIX: Explicitly convert y value to Number before passing */}
+                <strong>Value:</strong> {formatYAxis(Number(yValue))}
+            </div>
+        );
+    };
 
     // --- Render Nivo Chart ---
     return (
@@ -137,8 +154,12 @@ export default function EconomicChart({
                 </div>
             ) : (
                 <ResponsiveLine
-                    data={finalChartData}
-                    colors={[color]} // Nivo expects an array or function
+                    // Coalesce null y values to 0 for rendering if necessary, or handle gaps via segmentation
+                    data={finalChartData.map(series => ({
+                        ...series,
+                        data: series.data.map(d => ({ ...d, y: d.y ?? 0 })) // Coalesce nulls here for line drawing
+                    }))}
+                    colors={[color]} // Pass color as an array
                     margin={{ top: 20, right: 30, bottom: 60, left: 70 }}
                     xScale={{ type: "point" }}
                     yScale={{ type: "linear", min: computedYMin, max: computedYMax, stacked: false }}
@@ -155,13 +176,8 @@ export default function EconomicChart({
                     pointBorderWidth={showPoints ? 1 : 0}
                     pointBorderColor={{ from: "serieColor" }}
                     pointColor={{ theme: "background" }}
-                     tooltip={({ point }) => ( // Custom tooltip
-                           <div style={{ background: 'white', padding: '9px 12px', border: '1px solid #ccc', fontSize: '12px' }}>
-                               <strong>Date:</strong> {point.data.xFormatted}<br />
-                               <strong>Value:</strong> {formatYAxis(point.data.y)}
-                           </div>
-                       )}
-                    theme={{ /* Theme settings from previous step */
+                    tooltip={CustomTooltip} // Use the typed tooltip component
+                    theme={{
                         background: "#fff",
                         axis: {
                             domain: { line: { stroke: "#d1d5db", strokeWidth: 1 } },
@@ -169,7 +185,7 @@ export default function EconomicChart({
                             legend: { text: { fill: "#374151", fontSize: 12, fontWeight: 'bold' } },
                         },
                         grid: { line: { stroke: "#e5e7eb", strokeWidth: 0.5, strokeDasharray: "2 2" } },
-                        tooltip: { container: { background: "#ffffff", color: "#333333", fontSize: "12px", borderRadius: "2px", boxShadow: "0 1px 3px rgba(0,0,0,0.1)", padding: "5px 9px" } },
+                        // Remove Nivo's default tooltip container style if using custom
                     }}
                     legends={[]}
                 />
