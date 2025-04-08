@@ -13,16 +13,12 @@ interface DataPoint {
 interface NivoLineSeries {
     id: string;
     color: string;
-    // FIX: Define 'data' as an array of points
-    data: { x: string; y: number | null; }[];
+    data: { x: string; y: number | null; }[]; // Correctly defined as array
 }
 
 interface EconomicChartProps {
-    // Data and Filtering
     fullData: DataPoint[];
     dateRange: [number, number];
-
-    // Display Settings from Parent State
     chartId: string;
     color: string;
     yMin: string | number;
@@ -31,7 +27,7 @@ interface EconomicChartProps {
 }
 
 // --- Utility Functions ---
-function createSegments(dataArray: DataPoint[]): DataPoint[][] {
+function createSegments(dataArray: DataPoint[]): DataPoint[][] { /* ... Function unchanged ... */
     const segments: DataPoint[][] = [];
     let currentSegment: DataPoint[] = [];
     for (const pt of dataArray) {
@@ -50,7 +46,7 @@ function createSegments(dataArray: DataPoint[]): DataPoint[][] {
     return segments;
 }
 
-const formatYAxis = (val: number | string): string => {
+const formatYAxis = (val: number | string): string => { /* ... Function unchanged ... */
     const num = typeof val === "number" ? val : Number(val);
     if (isNaN(num)) return '';
     if (Math.abs(num) < 1e-9) return '0';
@@ -74,7 +70,7 @@ export default function EconomicChart({
     showPoints,
 }: EconomicChartProps) {
 
-    const filteredData = useMemo(() => {
+    const filteredData = useMemo(() => { /* ... Calculation unchanged ... */
         const start = Math.max(0, dateRange[0]);
         const end = Math.min(fullData.length, dateRange[1] + 1);
         if (start >= end && fullData.length > 0) {
@@ -84,77 +80,43 @@ export default function EconomicChart({
         return fullData.slice(start, validEnd);
     }, [fullData, dateRange]);
 
-    const { finalChartData, tickValues, areaBaselineValue, hasEnoughPoints } = useMemo(() => {
+    const { finalChartData, tickValues, areaBaselineValue, hasEnoughPoints } = useMemo(() => { /* ... Calculation unchanged ... */
         const validFilteredData = filteredData ?? [];
         const currentHasEnoughPoints = validFilteredData.filter(d => d.value !== null).length >= 2;
-
         const segments = createSegments(validFilteredData);
-        // This assignment should now be type-correct
-        const chartData: NivoLineSeries[] = segments.map((segment, idx) => ({
-            id: `${chartId}_${idx}`,
-            color: color,
-            data: segment.map((d) => ({ x: d.date, y: d.value })), // y is number | null
-        }));
-
+        const chartData: NivoLineSeries[] = segments.map((segment, idx) => ({ id: `${chartId}_${idx}`, color: color, data: segment.map((d) => ({ x: d.date, y: d.value })), }));
         const interval = currentHasEnoughPoints ? Math.max(1, Math.ceil(validFilteredData.length / 12)) : 1;
-        const ticks = validFilteredData.length > 0 ? validFilteredData
-            .map((d) => d.date)
-            .filter((_, i) => i % interval === 0) : [];
+        const ticks = validFilteredData.length > 0 ? validFilteredData.map((d) => d.date).filter((_, i) => i % interval === 0) : [];
         const lastDate = validFilteredData.length > 0 ? validFilteredData[validFilteredData.length - 1]?.date : null;
-        if (lastDate && !ticks.includes(lastDate)) {
-            ticks.push(lastDate);
-        }
-
+        if (lastDate && !ticks.includes(lastDate)) { ticks.push(lastDate); }
         let baseline: number | 'auto' = 0;
-        const values = validFilteredData
-            .map((d) => d.value)
-            .filter((v): v is number => v != null);
-        if (values.length > 0) {
-            const minValue = Math.min(...values);
-            baseline = minValue >= 0 ? 0 : minValue;
-             if (yMin !== 'auto' && !isNaN(Number(yMin))) {
-                 baseline = Math.max(baseline, Number(yMin));
-             }
-        } else {
-             baseline = 'auto';
-        }
-
-        return {
-            finalChartData: chartData,
-            tickValues: ticks,
-            areaBaselineValue: baseline,
-            hasEnoughPoints: currentHasEnoughPoints
-        };
+        const values = validFilteredData.map((d) => d.value).filter((v): v is number => v != null);
+        if (values.length > 0) { const minValue = Math.min(...values); baseline = minValue >= 0 ? 0 : minValue; if (yMin !== 'auto' && !isNaN(Number(yMin))) { baseline = Math.max(baseline, Number(yMin)); } } else { baseline = 'auto'; }
+        return { finalChartData: chartData, tickValues: ticks, areaBaselineValue: baseline, hasEnoughPoints: currentHasEnoughPoints };
     }, [filteredData, chartId, color, yMin]);
 
     const computedYMin = useMemo(() => (yMin === 'auto' ? 'auto' : Number(yMin)), [yMin]);
     const computedYMax = useMemo(() => (yMax === 'auto' ? 'auto' : Number(yMax)), [yMax]);
 
-    const CustomTooltip = ({ point }: PointTooltipProps) => {
+    const CustomTooltip = ({ point }: PointTooltipProps) => { /* ... Component unchanged ... */
         const yValue = point.data.y ?? 0;
-        return (
-            <div style={{ background: 'white', padding: '9px 12px', border: '1px solid #ccc', fontSize: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', borderRadius: '2px' }}>
-                <strong>Date:</strong> {point.data.xFormatted}<br />
-                <strong>Value:</strong> {formatYAxis(Number(yValue))}
-            </div>
-        );
+        return ( <div style={{ background: 'white', padding: '9px 12px', border: '1px solid #ccc', fontSize: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', borderRadius: '2px' }}> <strong>Date:</strong> {point.data.xFormatted}<br /> <strong>Value:</strong> {formatYAxis(Number(yValue))} </div> );
     };
 
     // --- Render Nivo Chart ---
     return (
-        <div className="h-[350px] w-full bg-white"> {/* Chart container */}
+        // FIX: REMOVED fixed height (h-[350px]) and set via style for clarity/override
+        <div className="w-full bg-white" style={{ height: '350px' }}>
             {!hasEnoughPoints ? (
                 <div className="flex items-center justify-center h-full text-sm text-gray-500">
                     Not enough data points for selected range.
                 </div>
             ) : (
                 <ResponsiveLine
-                    data={finalChartData.map(series => ({
-                        ...series,
-                        data: series.data.map(d => ({ ...d, y: d.y ?? 0 }))
-                    }))}
+                    data={finalChartData.map(series => ({ ...series, data: series.data.map(d => ({ ...d, y: d.y ?? 0 })) }))}
                     colors={[color]}
-                    margin={{ top: 20, right: 30, bottom: 60, left: 70 }}
+                    // FIX: INCREASED bottom margin
+                    margin={{ top: 20, right: 30, bottom: 70, left: 70 }}
                     xScale={{ type: "point" }}
                     yScale={{ type: "linear", min: computedYMin, max: computedYMax, stacked: false }}
                     axisBottom={{ tickSize: 5, tickPadding: 10, tickRotation: -45, tickValues: tickValues }}
@@ -171,13 +133,9 @@ export default function EconomicChart({
                     pointBorderColor={{ from: "serieColor" }}
                     pointColor={{ theme: "background" }}
                     tooltip={CustomTooltip}
-                    theme={{
+                    theme={{ /* ... Theme unchanged ... */
                         background: "#fff",
-                        axis: {
-                            domain: { line: { stroke: "#d1d5db", strokeWidth: 1 } },
-                            ticks: { line: { stroke: "#d1d5db", strokeWidth: 1 }, text: { fill: "#4b5563", fontSize: 10 } },
-                            legend: { text: { fill: "#374151", fontSize: 12, fontWeight: 'bold' } },
-                        },
+                        axis: { domain: { line: { stroke: "#d1d5db", strokeWidth: 1 } }, ticks: { line: { stroke: "#d1d5db", strokeWidth: 1 }, text: { fill: "#4b5563", fontSize: 10 } }, legend: { text: { fill: "#374151", fontSize: 12, fontWeight: 'bold' } }, },
                         grid: { line: { stroke: "#e5e7eb", strokeWidth: 0.5, strokeDasharray: "2 2" } },
                     }}
                     legends={[]}
