@@ -6,12 +6,12 @@ import Image from "next/image";
 import html2canvas from "html2canvas";
 
 import { supabase } from "@/lib/supabaseClient";
-import EconomicChart from "@/components/EconomicChart";
+import EconomicChart from "@/components/EconomicChart"; // Assuming this is the refactored version
 import Card from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider"; // Import Slider
-import { Switch } from "@/components/ui/switch"; // Import Switch
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 
 // --- Types ---
 interface FredRow { date: string; value: number | null; }
@@ -23,12 +23,11 @@ interface DataPoint { date: string; value: number | null; }
 interface ChartSettings {
     title: string; // Allow editing title
     chartColor: string;
-    yMin: string; // Keep as string to allow 'auto'
-    yMax: string; // Keep as string to allow 'auto'
+    yMin: string; // Keep as string to allow 'auto' or number strings
+    yMax: string; // Keep as string to allow 'auto' or number strings
     showPoints: boolean;
     showAdvanced: boolean;
     dateRange: [number, number];
-    // Note: Second series state removed for simplicity
 }
 
 // --- Data ---
@@ -117,9 +116,10 @@ const FULL_SERIES_LIST: SeriesMeta[] = [
     { series_id: "WALCL", description: "Total Assets of the Federal Reserve (H.4.1 Data)" },
 ];
 
+
 export default function HomeClient() {
     // Component State
-    const [allSeriesData, setAllSeriesData] = useState<SeriesData[]>([]); // Holds the actual data fetched
+    const [allSeriesData, setAllSeriesData] = useState<SeriesData[]>([]);
     const [loading, setLoading] = useState(true);
     const [pinnedIDs, setPinnedIDs] = useState<string[]>([]);
     const [searchTerm, setSearchTerm] = useState("");
@@ -141,47 +141,57 @@ export default function HomeClient() {
             try {
                 const results: SeriesData[] = [];
                 const initialSettings: Record<string, ChartSettings> = {};
-                // Limit concurrent fetches if needed, e.g., using Promise.all with slicing
-                for (const meta of FULL_SERIES_LIST) {
-                    const { data: rows, error } = await supabase
-                        .from("fred_data")
-                        .select("date, value")
-                        .eq("series_id", meta.series_id)
-                        .order("date", { ascending: true });
+                // Use Promise.all for potentially faster fetching (adjust concurrency if needed)
+                await Promise.all(FULL_SERIES_LIST.map(async (meta) => {
+                    try {
+                        const { data: rows, error } = await supabase
+                            .from("fred_data")
+                            .select("date, value")
+                            .eq("series_id", meta.series_id)
+                            .order("date", { ascending: true });
 
-                    if (error) {
-                        console.warn(`Error fetching ${meta.series_id}:`, error.message);
-                        continue;
+                        if (error) {
+                            console.warn(`Error fetching ${meta.series_id}:`, error.message);
+                            return; // Skip this series on error
+                        }
+
+                        const chartData = (rows ?? []).map((r: FredRow) => ({
+                            date: r.date, value: r.value
+                        }));
+
+                        // Add fetched data to results (needs careful handling with async map)
+                        results.push({
+                            series_id: meta.series_id,
+                            description: meta.description,
+                            data: chartData,
+                        });
+
+                        // Initialize settings for this chart
+                        const dataLength = chartData.length;
+                        initialSettings[meta.series_id] = {
+                            title: meta.description,
+                            chartColor: '#6E59A5',
+                            yMin: 'auto',
+                            yMax: 'auto',
+                            showPoints: false,
+                            showAdvanced: false,
+                            dateRange: dataLength > 0 ? [0, dataLength - 1] : [0, 0],
+                        };
+                    } catch (fetchError) {
+                         console.error(`Failed processing series ${meta.series_id}:`, fetchError);
                     }
+                }));
 
-                    const chartData = (rows ?? []).map((r: FredRow) => ({
-                        date: r.date, value: r.value
-                    }));
+                // Sort results array to match FULL_SERIES_LIST order if needed, as Promise.all doesn't guarantee order
+                 const orderedResults = FULL_SERIES_LIST
+                     .map(meta => results.find(res => res.series_id === meta.series_id))
+                     .filter((res): res is SeriesData => res !== undefined); // Filter out undefined results from errors
 
-                    results.push({
-                        series_id: meta.series_id,
-                        description: meta.description,
-                        data: chartData,
-                    });
-
-                    // Initialize settings for this chart
-                     const dataLength = chartData.length;
-                    initialSettings[meta.series_id] = {
-                        title: meta.description, // Start with original description
-                        chartColor: '#6E59A5',
-                        yMin: 'auto',
-                        yMax: 'auto',
-                        showPoints: false,
-                        showAdvanced: false,
-                         // Handle empty data case for range
-                         dateRange: dataLength > 0 ? [0, dataLength - 1] : [0, 0],
-                    };
-                }
-                setAllSeriesData(results);
-                setChartSettingsMap(initialSettings); // Set initial settings after data is fetched
+                setAllSeriesData(orderedResults);
+                setChartSettingsMap(initialSettings);
 
             } catch (err) {
-                console.error("Unexpected error fetching series data:", err);
+                console.error("Unexpected error during data fetching:", err);
             } finally {
                 setLoading(false);
             }
@@ -190,9 +200,8 @@ export default function HomeClient() {
     }, []); // Run once on mount
 
     // --- State Update Functions ---
-    const updateChartSetting = useCallback((seriesId: string, key: keyof ChartSettings, value: any) => {
+    const updateChartSetting = useCallback((seriesId: string, key: keyof ChartSettings, value: string | boolean | [number, number]) => {
         setChartSettingsMap(prev => {
-            // Ensure the seriesId exists before trying to update
             if (!prev[seriesId]) {
                 console.warn(`Attempted to update settings for non-existent seriesId: ${seriesId}`);
                 return prev;
@@ -205,28 +214,26 @@ export default function HomeClient() {
                 }
             };
         });
-    }, []); // No dependencies, function definition is stable
+    }, []);
 
 
     const handleDateRangeChange = useCallback((seriesId: string, value: [number, number]) => {
         const seriesData = allSeriesData.find(s => s.series_id === seriesId)?.data;
         const maxIndex = seriesData ? Math.max(0, seriesData.length - 1) : 0;
 
-        // Clamp values to valid range [0, maxIndex]
         let start = Math.max(0, Math.min(value[0], maxIndex));
-        let end = Math.max(0, Math.min(value[1], maxIndex));
+        const end = Math.max(0, Math.min(value[1], maxIndex));
 
-        // Ensure start <= end
         if (start > end) {
-            start = end; // Or swap them if preferred: [start, end] = [end, start]
+            start = end;
         }
 
         updateChartSetting(seriesId, 'dateRange', [start, end]);
-    }, [allSeriesData, updateChartSetting]); // Depends on data and update function
+    }, [allSeriesData, updateChartSetting]);
 
-    // --- Filtering Logic (based on allSeriesData) ---
+    // --- Filtering Logic ---
     const normalizedSearch = searchTerm.trim().toLowerCase();
-    let filteredSeriesMeta = FULL_SERIES_LIST; // Start filtering from the meta list
+    let filteredSeriesMeta = FULL_SERIES_LIST;
      if (normalizedSearch) {
          filteredSeriesMeta = FULL_SERIES_LIST.filter(
              (s) =>
@@ -234,14 +241,18 @@ export default function HomeClient() {
                  s.description.toLowerCase().includes(normalizedSearch)
          );
      }
-     // Create the combined list based on filtered metadata and pinning order
      const filteredSeriesIds = new Set(filteredSeriesMeta.map(s => s.series_id));
      const pinned = pinnedIDs.filter(id => filteredSeriesIds.has(id));
-     const unpinned = Array.from(filteredSeriesIds).filter(id => !pinnedIDs.includes(id));
+     // Ensure unpinned only includes series that actually loaded data
+     const availableFilteredIds = new Set(allSeriesData.map(d => d.series_id));
+     const unpinned = Array.from(filteredSeriesIds)
+        .filter(id => !pinnedIDs.includes(id))
+        .filter(id => availableFilteredIds.has(id)); // Only include if data is present
+
      const combinedSeriesIds = [...pinned, ...unpinned];
 
 
-    // --- Pagination Logic (based on combinedSeriesIds) ---
+    // --- Pagination Logic ---
     const totalItems = combinedSeriesIds.length;
     const totalPages = Math.ceil(totalItems / pageSize);
 
@@ -268,7 +279,6 @@ export default function HomeClient() {
     }
 
     async function exportChartImage(seriesId: string, format: 'png' | 'jpeg') {
-        // Target the specific div meant for export
         const chartExportArea = chartExportRefs.current.get(seriesId);
         if (!chartExportArea) {
             console.error(`Export container ref not found for series ${seriesId}`);
@@ -277,11 +287,10 @@ export default function HomeClient() {
         }
 
         try {
-             // No need to hide elements, just capture the correct div
             const canvas = await html2canvas(chartExportArea, {
                 scale: 2,
                 useCORS: true,
-                backgroundColor: '#ffffff', // Vital for JPG and transparent PNGs
+                backgroundColor: '#ffffff',
                 logging: false,
             });
             const dataUrl = format === 'png' ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', 0.9);
@@ -295,7 +304,7 @@ export default function HomeClient() {
     async function handleExportPng(seriesId: string) { await exportChartImage(seriesId, 'png'); }
     async function handleExportJpg(seriesId: string) { await exportChartImage(seriesId, 'jpeg'); }
 
-     function handleExportCsv(seriesId: string) {
+    function handleExportCsv(seriesId: string) {
         const series = allSeriesData.find(s => s.series_id === seriesId);
          if (!series || !series.data || series.data.length === 0) {
              alert("No data available to export.");
@@ -313,7 +322,7 @@ export default function HomeClient() {
      }
 
     // --- Other Handlers ---
-    async function handleRequestSubmit(e: FormEvent<HTMLFormElement>) { /* ... keep as before ... */
+    async function handleRequestSubmit(e: FormEvent<HTMLFormElement>) {
         e.preventDefault();
         const formData = new FormData(e.currentTarget);
         const requested_series_id = formData.get("requested_series_id")?.toString().trim() || "";
@@ -330,7 +339,7 @@ export default function HomeClient() {
             alert(`Error submitting request: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
      }
-    const togglePin = (seriesId: string) => { /* ... keep as before ... */
+    const togglePin = (seriesId: string) => {
          setPinnedIDs((prev) =>
              prev.includes(seriesId)
                  ? prev.filter((id) => id !== seriesId)
@@ -339,7 +348,7 @@ export default function HomeClient() {
      };
 
      // --- Pagination UI ---
-     const renderPageSelectionBar = () => { /* ... keep as before ... */
+     const renderPageSelectionBar = () => {
          if (totalPages <= 1) { return null; }
          return (
              <div className="flex flex-wrap items-center justify-center gap-2 my-4 sm:my-6">
@@ -386,116 +395,84 @@ export default function HomeClient() {
                                     const series = allSeriesData.find(s => s.series_id === seriesId);
                                     const settings = chartSettingsMap[seriesId];
 
-                                    // Skip rendering if data or settings are somehow missing (shouldn't happen with init)
+                                    // Skip rendering if data or settings are somehow missing
                                     if (!series || !settings) {
-                                        console.warn(`Missing data or settings for ${seriesId}`);
-                                        return null;
+                                        // This might happen briefly if data loads slightly after settings init attempt
+                                        return <Card key={seriesId} className="p-4 flex items-center justify-center h-[500px] text-gray-500">Loading data for {seriesId}...</Card>;
                                     }
                                      const currentDataLength = series.data.length;
 
                                     return (
-                                        <Card key={seriesId} className="p-4 flex flex-col h-full"> {/* Use h-full for consistent card height */}
+                                        <Card key={seriesId} className="p-4 flex flex-col h-full"> {/* Use h-full */}
                                             {/* --- Section 1: Controls (Outside Export Area) --- */}
                                             <div className="chart-controls">
-                                                {/* Title/Subtitle Input and Pin Button */}
-                                                 <div className="flex justify-between items-start mb-2 gap-2">
-                                                     {/* Editable Title */}
+                                                <div className="flex justify-between items-start mb-2 gap-2">
                                                      <Input
                                                          type="text"
                                                          value={settings.title}
                                                          onChange={(e) => updateChartSetting(seriesId, 'title', e.target.value)}
-                                                         className="text-base font-semibold border-0 shadow-none focus-visible:ring-0 p-0 h-auto flex-grow mr-2"
+                                                         className="text-base font-semibold border-0 shadow-none focus-visible:ring-0 p-0 h-auto flex-grow mr-2 bg-transparent" // Make input transparent
                                                          aria-label={`Title for ${seriesId}`}
                                                      />
                                                      <Button variant="outline" size="sm" onClick={() => togglePin(seriesId)} className="flex-shrink-0">{pinnedIDs.includes(seriesId) ? "Unpin" : "Pin"}</Button>
                                                  </div>
-                                                 {/* Non-editable Subtitle */}
                                                  <p className="text-sm text-gray-600 mb-3">{seriesId}</p>
 
-
-                                                {/* Slider */}
                                                 <div className="mb-3">
                                                     <label htmlFor={`slider-${seriesId}`} className="block text-sm mb-1 font-medium text-gray-700">Date Range</label>
                                                     <Slider.Root
                                                         id={`slider-${seriesId}`}
                                                         value={settings.dateRange}
-                                                        // Use the dedicated handler for date range
-                                                         onValueChange={(value) => handleDateRangeChange(seriesId, value as [number, number])}
+                                                        onValueChange={(value) => handleDateRangeChange(seriesId, value as [number, number])}
                                                         min={0}
-                                                        max={Math.max(0, currentDataLength - 1)} // Use current data length
+                                                        max={Math.max(0, currentDataLength - 1)}
                                                         step={1}
                                                         minStepsBetweenThumbs={1}
                                                         className="relative flex w-full touch-none items-center select-none"
                                                         aria-label="Date range slider"
-                                                        disabled={currentDataLength <= 1} // Disable if only 0 or 1 points
+                                                        disabled={currentDataLength <= 1}
                                                     >
                                                         <Slider.Track className="relative h-1.5 w-full grow rounded-full bg-gray-200"><Slider.Range className="absolute h-full rounded-full bg-primary" /></Slider.Track>
                                                         <Slider.Thumb className="block h-4 w-4 rounded-full border border-primary bg-white shadow transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50" />
                                                         <Slider.Thumb className="block h-4 w-4 rounded-full border border-primary bg-white shadow transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50" />
                                                     </Slider.Root>
                                                     <div className="flex justify-between text-xs text-gray-600 mt-1 px-1">
-                                                         <span>{series.data[settings.dateRange[0]]?.date ?? (currentDataLength > 0 ? series.data[0]?.date : 'Start')}</span>
-                                                         <span>{series.data[settings.dateRange[1]]?.date ?? (currentDataLength > 0 ? series.data[currentDataLength - 1]?.date : 'End')}</span>
+                                                        {/* Robust date display handling potential undefined */}
+                                                        <span>{series.data[settings.dateRange[0]]?.date ?? (currentDataLength > 0 ? series.data[0]?.date : 'Start')}</span>
+                                                        <span>{series.data[settings.dateRange[1]]?.date ?? (currentDataLength > 0 ? series.data[currentDataLength - 1]?.date : 'End')}</span>
                                                     </div>
                                                 </div>
-
-                                                {/* Customize Button */}
-                                                <button type="button" onClick={() => updateChartSetting(seriesId, 'showAdvanced', !settings.showAdvanced)} className="mb-3 underline text-sm text-gray-800 hover:text-gray-900">
-                                                    {settings.showAdvanced ? "Hide Customize Chart" : "Customize Chart"}
-                                                </button>
-
-                                                {/* Advanced Panel */}
+                                                <button type="button" onClick={() => updateChartSetting(seriesId, 'showAdvanced', !settings.showAdvanced)} className="mb-3 underline text-sm text-gray-800 hover:text-gray-900"> {settings.showAdvanced ? "Hide Customize Chart" : "Customize Chart"} </button>
                                                 {settings.showAdvanced && (
                                                     <div className="space-y-3 mb-3 border border-gray-100 p-3 rounded bg-gray-50/50">
-                                                        {/* Color */}
-                                                        <div className="flex items-center gap-2">
-                                                            <label htmlFor={`color-${seriesId}`} className="text-sm w-24 shrink-0">Chart Color:</label>
-                                                            <input id={`color-${seriesId}`} type="color" value={settings.chartColor} onChange={(e) => updateChartSetting(seriesId, 'chartColor', e.target.value)} className="w-10 h-8 border p-0 cursor-pointer rounded" />
-                                                        </div>
-                                                        {/* Y Range */}
-                                                        <div className="flex items-center flex-wrap gap-2">
-                                                            <label className="text-sm w-24 shrink-0">Y Range:</label>
-                                                            <Input type="text" placeholder="Min/auto" value={settings.yMin} onChange={(e) => updateChartSetting(seriesId, 'yMin', e.target.value)} className="w-24 h-8 text-sm" aria-label="Y-axis minimum" />
-                                                            <Input type="text" placeholder="Max/auto" value={settings.yMax} onChange={(e) => updateChartSetting(seriesId, 'yMax', e.target.value)} className="w-24 h-8 text-sm" aria-label="Y-axis maximum" />
-                                                        </div>
-                                                        {/* Show Points */}
-                                                        <div className="flex items-center gap-2">
-                                                            <Switch checked={settings.showPoints} onCheckedChange={(checked) => updateChartSetting(seriesId, 'showPoints', checked)} id={`showPoints-${seriesId}`} />
-                                                            <label htmlFor={`showPoints-${seriesId}`} className="text-sm cursor-pointer">Show Points</label>
-                                                        </div>
-                                                        {/* Second series controls removed */}
+                                                        <div className="flex items-center gap-2"><label htmlFor={`color-${seriesId}`} className="text-sm w-24 shrink-0">Chart Color:</label><input id={`color-${seriesId}`} type="color" value={settings.chartColor} onChange={(e) => updateChartSetting(seriesId, 'chartColor', e.target.value)} className="w-10 h-8 border p-0 cursor-pointer rounded" /></div>
+                                                        <div className="flex items-center flex-wrap gap-2"><label className="text-sm w-24 shrink-0">Y Range:</label><Input type="text" placeholder="Min/auto" value={settings.yMin} onChange={(e) => updateChartSetting(seriesId, 'yMin', e.target.value)} className="w-24 h-8 text-sm" aria-label="Y-axis minimum" /><Input type="text" placeholder="Max/auto" value={settings.yMax} onChange={(e) => updateChartSetting(seriesId, 'yMax', e.target.value)} className="w-24 h-8 text-sm" aria-label="Y-axis maximum" /></div>
+                                                        <div className="flex items-center gap-2"><Switch checked={settings.showPoints} onCheckedChange={(checked) => updateChartSetting(seriesId, 'showPoints', checked)} id={`showPoints-${seriesId}`} /><label htmlFor={`showPoints-${seriesId}`} className="text-sm cursor-pointer">Show Points</label></div>
                                                     </div>
                                                 )}
                                             </div>
 
                                             {/* --- Section 2: Export Area (Ref attached here) --- */}
                                             <div
-                                                className="chart-export-area" // Just a marker, styling comes from children
-                                                ref={(el) => {
-                                                    // Update ref map
-                                                    if (el) chartExportRefs.current.set(seriesId, el);
-                                                    else chartExportRefs.current.delete(seriesId);
-                                                }}
+                                                className="chart-export-area flex-grow flex flex-col" // Use flex-grow to take remaining space
+                                                ref={(el) => { if (el) chartExportRefs.current.set(seriesId, el); else chartExportRefs.current.delete(seriesId); }}
                                             >
-                                                {/* Chart Component (Receives settings via props) */}
+                                                {/* Chart Component */}
                                                 <EconomicChart
-                                                    fullData={series.data} // Pass the full data
-                                                    dateRange={settings.dateRange} // Pass current range
-                                                    chartId={settings.title || seriesId} // Pass title or ID for Nivo line ID
+                                                    fullData={series.data}
+                                                    dateRange={settings.dateRange}
+                                                    chartId={settings.title || seriesId} // Use edited title for Nivo ID
                                                     color={settings.chartColor}
                                                     yMin={settings.yMin}
                                                     yMax={settings.yMax}
                                                     showPoints={settings.showPoints}
                                                 />
-                                                {/* Source Footer (Inside Export Area) */}
-                                                <div className="flex items-center justify-between text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200">
-                                                    <span>Visualization by PrettyFRED</span>
-                                                    <span>Source: FRED</span>
-                                                </div>
+                                                {/* Source Footer */}
+                                                <div className="flex items-center justify-between text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200"><span>Visualization by PrettyFRED</span><span>Source: FRED</span></div>
                                             </div>
 
                                             {/* --- Section 3: Export Buttons (Outside Export Area) --- */}
-                                            <div className="flex flex-wrap gap-2 mt-auto pt-4"> {/* mt-auto pushes buttons down */}
+                                            <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-gray-100"> {/* Added top border */}
                                                 <Button variant="outline" size="sm" onClick={() => handleExportPng(seriesId)}>Export PNG</Button>
                                                 <Button variant="outline" size="sm" onClick={() => handleExportJpg(seriesId)}>Export JPG</Button>
                                                 <Button variant="outline" size="sm" onClick={() => handleExportCsv(seriesId)}>Export CSV</Button>
@@ -509,7 +486,7 @@ export default function HomeClient() {
                     </>
                 )}
 
-                {/* Modals (Keep as before) */}
+                {/* Modals */}
                  {showAllSeriesModal && ( <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50"><div className="bg-white rounded-lg p-6 w-full max-w-xl max-h-[80vh] flex flex-col shadow-xl"><h2 className="text-xl font-semibold mb-4 text-gray-800">All Available Series</h2><ul className="flex-grow overflow-y-auto list-disc pl-5 space-y-1 text-sm text-gray-700 border-t border-b py-3 my-2">{FULL_SERIES_LIST.length > 0 ? (FULL_SERIES_LIST.map((s) => (<li key={s.series_id}><strong className="text-gray-900">{s.series_id}</strong> - {s.description}</li>))) : (<li>No series data loaded.</li>)}</ul><Button className="mt-4 self-end" variant="outline" onClick={() => setShowAllSeriesModal(false)}>Close</Button></div></div> )}
                  {showRequestForm && ( <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50"><div className="bg-white rounded-lg p-6 w-full max-w-md shadow-xl"><h2 className="text-xl font-semibold mb-4 text-gray-800">Request a Data Series</h2><form onSubmit={handleRequestSubmit} className="space-y-4"><div><label htmlFor="requested_series_id" className="block text-sm font-medium mb-1 text-gray-700">Desired FRED Series ID <span className="text-red-500">*</span></label><Input type="text" id="requested_series_id" name="requested_series_id" required /><p className="text-xs text-gray-500 mt-1">e.g., <a href="https://fred.stlouisfed.org/" target="_blank" rel="noopener noreferrer" className="underline">Find IDs on FRED</a></p></div><div><label htmlFor="notes" className="block text-sm font-medium mb-1 text-gray-700">Notes / Rationale (Optional)</label><textarea id="notes" name="notes" className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500" rows={3} /></div><div className="flex justify-end gap-2 pt-2"><Button variant="outline" type="button" onClick={() => setShowRequestForm(false)}>Cancel</Button><Button type="submit">Submit Request</Button></div></form></div></div> )}
 
