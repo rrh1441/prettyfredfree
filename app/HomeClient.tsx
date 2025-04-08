@@ -321,8 +321,11 @@ export default function HomeClient() {
 
                                                 {/* Chart Component */}
                                                 <EconomicChart fullData={series.data} dateRange={settings.dateRange} chartId={settings.title || seriesId} color={settings.chartColor} yMin={settings.yMin} yMax={settings.yMax} showPoints={settings.showPoints} />
-                                                {/* Source Footer INSIDE export area */}
-                                                <div className="flex items-center justify-between text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200 px-1 pb-1"><span>Visualization by PrettyFRED</span><span>Source: FRED</span></div>
+
+                                                {/* Source Footer INSIDE export area - Centered and Combined Text */}
+                                                <div className="text-center text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200 px-1 pb-1">
+                                                    FRED (Federal Reserve Economic Data) Visualized by PrettyFRED
+                                                </div>
                                             </div>
 
                                             {/* --- Section 3: Export Buttons (Outside Export Area) --- */}
